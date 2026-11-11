@@ -1,0 +1,74 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fruit Freshness - Vision + Sensor</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8/dist/teachablemachine-image.min.js"></script>
+<style>
+ body{font-family:system-ui,sans-serif;max-width:960px;margin:16px auto;padding:0 12px;background:#0f172a;color:#e2e8f0}
+ .row{display:flex;gap:14px;flex-wrap:wrap}
+ .col{flex:1;min-width:280px}
+ .box{background:#1e293b;border-radius:12px;padding:14px;margin-bottom:12px}
+ .big{padding:16px;border-radius:12px;text-align:center;font-size:1.4rem;font-weight:700;background:#6b7280;margin-bottom:10px}
+ input{width:70%;padding:8px} button{padding:8px 14px}
+ small{color:#94a3b8}
+</style></head><body>
+<h2>Smart Fruit Freshness: Camera AI + Gas Sensor</h2>
+<div class="box">Teachable Machine model URL:
+ <input id="url" placeholder="https://teachablemachine.withgoogle.com/models/XXXX/">
+ <button onclick="start()">Start</button></div>
+<div class="row">
+ <div class="col box"><div id="cam"></div></div>
+ <div class="col">
+  <div class="box"><small>VISION (camera + AI)</small><div class="big" id="vis">Not started</div><div id="bars"></div></div>
+  <div class="box"><small>CHEMICAL (gas sensor, live from ESP32)</small><div class="big" id="sen">Waiting...</div><div id="vals"></div></div>
+  <div class="big" id="final">FINAL VERDICT: -</div>
+ </div>
+</div>
+<script>
+const COL=['#16a34a','#d97706','#dc2626'];
+let model,webcam,visLevel=null,senLevel=null;
+const q=new URLSearchParams(location.search).get('m'); if(q) document.getElementById('url').value=q;
+
+async function start(){
+  let u=document.getElementById('url').value.trim(); if(!u.endsWith('/')) u+='/';
+  model=await tmImage.load(u+'model.json',u+'metadata.json');
+  webcam=new tmImage.Webcam(320,320,true);
+  await webcam.setup(); await webcam.play();
+  document.getElementById('cam').appendChild(webcam.canvas);
+  window.requestAnimationFrame(loop);
+}
+async function loop(){ webcam.update(); await predict(); window.requestAnimationFrame(loop); }
+async function predict(){
+  const p=await model.predict(webcam.canvas);
+  let best=p[0]; p.forEach(x=>{if(x.probability>best.probability)best=x;});
+  const rotten=/rot|spoil|bad/i.test(best.className);
+  visLevel = best.probability<0.7 ? 1 : (rotten ? 2 : 0);
+  const v=document.getElementById('vis');
+  v.textContent=best.className.toUpperCase()+' ('+(best.probability*100).toFixed(0)+'%)';
+  v.style.background=COL[visLevel];
+  document.getElementById('bars').innerHTML=p.map(x=>x.className+': '+(x.probability*100).toFixed(0)+'%').join('<br>');
+  combine();
+}
+async function sensors(){
+  try{
+    const r=await (await fetch('/api/data')).json();
+    const d=r.data; if(!d.length) return;
+    const last=d[d.length-1];
+    if((r.now-last.t)/1000>20){ senLevel=null; document.getElementById('sen').textContent='SENSOR OFFLINE'; return; }
+    senLevel=last.level||0;
+    const s=document.getElementById('sen'); s.textContent=last.status; s.style.background=COL[senLevel];
+    document.getElementById('vals').innerHTML='Freshness score: '+last.freshness_score+' | Gas: '+last.gas_raw+' | Temp: '+last.temp_c+'C | Humidity: '+last.humidity+'%';
+    combine();
+  }catch(e){}
+}
+function combine(){
+  const f=document.getElementById('final');
+  const lv=[visLevel,senLevel].filter(x=>x!==null);
+  if(!lv.length) return;
+  const w=Math.max(...lv);
+  f.textContent='FINAL VERDICT: '+['FRESH - SAFE TO EAT','RIPENING / UNCERTAIN - USE SOON','SPOILED - DISCARD'][w];
+  f.style.background=COL[w];
+}
+sensors(); setInterval(sensors,3000);
+</script></body></html>
